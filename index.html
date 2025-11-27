@@ -154,7 +154,8 @@ const micBtn  = document.getElementById('mic');
 let loading   = false;
 let speaking  = false;
 let ttsUnlocked = false;
-
+const MAX_HIST = 20;          // 最多保留 20 条
+let messages  = [{role:'system', content:SYSTEM}]; // 初始系统提示
 /* =========  TTS：首次手势解锁 + 错误重试  ========= */
 function unlockTTS(){
   if(ttsUnlocked) return;
@@ -182,7 +183,7 @@ function speak(text){
 }
 
 /* =========  聊天核心  ========= */
-async function askBot(text){
+async function askBot(){
   const res = await fetch(`${BASE_URL}/chat/completions`,{
     method:'POST',
     headers:{
@@ -191,10 +192,7 @@ async function askBot(text){
     },
     body:JSON.stringify({
       model:MODEL,
-      messages:[
-        {role:'system',content:SYSTEM},
-        {role:'user',content:text}
-      ],
+      messages,          // 整包带历史
       temperature:0.7
     })
   });
@@ -216,13 +214,22 @@ async function send(){
   if(!txt||loading) return;
   inputEl.value='';
   addBubble('user',txt);
+
+  // 1. 把用户这句塞进历史
+  messages.push({role:'user', content:txt});
+  if(messages.length>MAX_HIST) messages.splice(1,1); // 删掉最早一条（系统提示不动）
+
   loading=true; sendBtn.disabled=true;
   try{
-    const reply=await askBot(txt);
+    const reply=await askBot();        // 2. 带历史一起发
     addBubble('bot',reply);
     speak(reply);
+
+    // 3. 把助手这句也塞进历史
+    messages.push({role:'assistant', content:reply});
+    if(messages.length>MAX_HIST) messages.splice(1,1);
   }catch(e){
-    addBubble(`bot,${Error} `+e.message);
+    addBubble('bot','Error: '+e.message);
   }finally{
     loading=false; sendBtn.disabled=false;
   }
