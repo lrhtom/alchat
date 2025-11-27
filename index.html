@@ -7,6 +7,15 @@
 <!-- =========  替换原 <style> 部分即可  ========= -->
 <style>
 /* ----  reset  ---- */
+/* 新增：语言选择下拉框 */
+#langSel{
+  padding:8px 12px;
+  font-size:15px;
+  border-radius:16px;
+  border:1px solid rgba(0,0,0,.1);
+  background:rgba(255,255,255,.9);
+  outline:none;
+}
 *{box-sizing:border-box;margin:0;padding:0}
 body{
   font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
@@ -127,11 +136,16 @@ button:active{transform:scale(.95);box-shadow:0 1px 3px rgba(0,0,0,.15)}
 </head>
 <body>
 
+<!-- =================  页面结构  ================= -->
 <!-- 聊天区 -->
 <div id="chat"></div>
 
-<!-- 底部操作栏 -->
+<!-- 底部操作栏（新增一个下拉框） -->
 <div id="bar">
+  <select id="langSel">
+    <option value="en">English</option>
+    <option value="ja">日本語</option>
+  </select>
   <input id="input" placeholder="输入英文或长按麦克风…" autocomplete="off" />
   <button id="send">发送</button>
   <button id="mic">🎤</button>
@@ -142,25 +156,65 @@ button:active{transform:scale(.95);box-shadow:0 1px 3px rgba(0,0,0,.15)}
 const BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const API_KEY  = '4c335d77-5b75-468a-aff2-164f240ecc85';
 const MODEL    = 'ep-20251010224847-h9g7p';
-const SYSTEM   = 'You are a helpful English assistant. Always reply in English.每次谈话不可以太多词（100词上限）';
+
+/* 新增：语言对照表 */
+const LANG = {
+  en: {
+    SYSTEM: 'You are a helpful English assistant. Always reply in English.每次谈话不可以太多词（100词上限）',
+    PLACEHOLDER: '输入英文或长按麦克风…',
+    SEND: '发送',
+    MIC_ALERT: '请使用 Chrome/Edge 浏览器',
+    ERROR: 'Error: '
+  },
+  ja: {
+    SYSTEM: 'あなたは親切な日本語アシスタントです。常に日本語で返事してください。毎回の会話は100語以内に抑えてください。',
+    PLACEHOLDER: '日本語で入力、またはマイク長押し…',
+    SEND: '送信',
+    MIC_ALERT: 'Chrome/Edgeブラウザをご利用ください',
+    ERROR: 'エラー: '
+  }
+};
 
 /* =========  DOM  ========= */
 const chatBox = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const micBtn  = document.getElementById('mic');
+const langSel = document.getElementById('langSel');   // 新增
 
 /* =========  状态  ========= */
 let loading   = false;
 let speaking  = false;
 let ttsUnlocked = false;
-const MAX_HIST = 20;          // 最多保留 20 条
-let messages  = [{role:'system', content:SYSTEM}]; // 初始系统提示
-/* =========  TTS：首次手势解锁 + 错误重试  ========= */
+const MAX_HIST = 20;
+let messages  = [];   // 先留空，等切换语言后再填
+
+/* 新增：当前语言 */
+let currentLang = langSel.value;   // en / ja
+
+/* 新增：根据语言重新生成系统提示 & 界面文字 */
+function applyLang(lang){
+  currentLang = lang;
+  // 1. 系统提示
+  messages = [{role:'system', content: LANG[lang].SYSTEM}];
+  // 2. 输入框提示文字
+  inputEl.placeholder = LANG[lang].PLACEHOLDER;
+  // 3. 按钮文字
+  sendBtn.textContent = LANG[lang].SEND;
+  // 4. 清屏（可选：切换语言后重新开始）
+  chatBox.innerHTML = '';
+}
+// 初始化一次
+applyLang(currentLang);
+
+/* 新增：下拉框切换 */
+langSel.addEventListener('change',()=> applyLang(langSel.value) );
+
+/* =========  TTS 解锁 ========= */
 function unlockTTS(){
   if(ttsUnlocked) return;
-  ttsUnlocked = true;
   const u=new SpeechSynthesisUtterance('');u.volume=0;speechSynthesis.speak(u);
+  ttsUnlocked = true;
 }
 function speechSpeak(u){
   if(!ttsUnlocked) unlockTTS();
@@ -172,7 +226,8 @@ function speak(text){
   if(!('speechSynthesis' in window)) return;
   speaking = true;
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'en-US';
+  // 关键：根据当前语言选声音
+  u.lang = currentLang==='ja' ? 'ja-JP' : 'en-US';
   let retried = false;
   u.onend = () => speaking = false;
   u.onerror = () => {
@@ -192,7 +247,7 @@ async function askBot(){
     },
     body:JSON.stringify({
       model:MODEL,
-      messages,          // 整包带历史
+      messages,
       temperature:0.7
     })
   });
@@ -215,35 +270,32 @@ async function send(){
   inputEl.value='';
   addBubble('user',txt);
 
-  // 1. 把用户这句塞进历史
   messages.push({role:'user', content:txt});
-  if(messages.length>MAX_HIST) messages.splice(1,1); // 删掉最早一条（系统提示不动）
+  if(messages.length>MAX_HIST) messages.splice(1,1);
 
   loading=true; sendBtn.disabled=true;
   try{
-    const reply=await askBot();        // 2. 带历史一起发
+    const reply=await askBot();
     addBubble('bot',reply);
     speak(reply);
-
-    // 3. 把助手这句也塞进历史
     messages.push({role:'assistant', content:reply});
     if(messages.length>MAX_HIST) messages.splice(1,1);
   }catch(e){
-    addBubble('bot','Error: '+e.message);
+    addBubble('bot', LANG[currentLang].ERROR + e.message);
   }finally{
     loading=false; sendBtn.disabled=false;
   }
 }
 
-/* =========  语音输入：长按→连续监听  ========= */
+/* =========  语音输入  ========= */
 let recog,recording=false;
 function startRecog(){
   if(!('webkitSpeechRecognition' in window)){
-    alert('请使用 Chrome/Edge 浏览器');
+    alert(LANG[currentLang].MIC_ALERT);
     return;
   }
   recog=new webkitSpeechRecognition();
-  recog.lang='en-US';
+  recog.lang = currentLang==='ja' ? 'ja-JP' : 'en-US';   // 识别语言同步
   recog.interimResults=true;
   recog.continuous=true;
   recog.onresult=e=>{
