@@ -145,6 +145,7 @@ button:active{transform:scale(.95);box-shadow:0 1px 3px rgba(0,0,0,.15)}
   <select id="langSel">
     <option value="en">English</option>
     <option value="ja">日本語</option>
+    <option value="zh">中文</option>
   </select>
   <input id="input" placeholder="输入英文或长按麦克风…" autocomplete="off" />
   <button id="send">发送</button>
@@ -157,21 +158,28 @@ const BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
 const API_KEY  = '4c335d77-5b75-468a-aff2-164f240ecc85';
 const MODEL    = 'ep-20251010224847-h9g7p';
 
-/* 新增：语言对照表 */
+/* 新增：三语对照表 */
 const LANG = {
   en: {
-    SYSTEM: 'You are a helpful English assistant. Always reply in English.每次谈话不可以太多词（100词上限）',
-    PLACEHOLDER: '输入英文或长按麦克风…',
-    SEND: '发送',
-    MIC_ALERT: '请使用 Chrome/Edge 浏览器',
+    SYSTEM: 'You are a helpful English assistant. Always reply in English. Keep it under 100 words.',
+    PLACEHOLDER: 'Type English or hold mic…',
+    SEND: 'Send',
+    MIC_ALERT: 'Please use Chrome/Edge',
     ERROR: 'Error: '
   },
   ja: {
-    SYSTEM: 'あなたは親切な日本語アシスタントです。常に日本語で返事してください。毎回の会話は100語以内に抑えてください。',
+    SYSTEM: 'あなたは親切な日本語アシスタントです。常に日本語で返事してください。100語以内に抑えてください。',
     PLACEHOLDER: '日本語で入力、またはマイク長押し…',
     SEND: '送信',
     MIC_ALERT: 'Chrome/Edgeブラウザをご利用ください',
     ERROR: 'エラー: '
+  },
+  zh: {
+    SYSTEM: '你是友善的中文助手，请用中文回答，每次不超过 100 字。',
+    PLACEHOLDER: '输入中文或长按麦克风…',
+    SEND: '发送',
+    MIC_ALERT: '请使用 Chrome/Edge 浏览器',
+    ERROR: '出错：'
   }
 };
 
@@ -180,35 +188,26 @@ const chatBox = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const micBtn  = document.getElementById('mic');
-const langSel = document.getElementById('langSel');   // 新增
+const langSel = document.getElementById('langSel');
 
 /* =========  状态  ========= */
 let loading   = false;
 let speaking  = false;
 let ttsUnlocked = false;
 const MAX_HIST = 20;
-let messages  = [];   // 先留空，等切换语言后再填
+let messages  = [];
+let currentLang = langSel.value;   // en / ja / zh
 
-/* 新增：当前语言 */
-let currentLang = langSel.value;   // en / ja
-
-/* 新增：根据语言重新生成系统提示 & 界面文字 */
+/* 新增：应用语言 */
 function applyLang(lang){
   currentLang = lang;
-  // 1. 系统提示
   messages = [{role:'system', content: LANG[lang].SYSTEM}];
-  // 2. 输入框提示文字
   inputEl.placeholder = LANG[lang].PLACEHOLDER;
-  // 3. 按钮文字
   sendBtn.textContent = LANG[lang].SEND;
-  // 4. 清屏（可选：切换语言后重新开始）
   chatBox.innerHTML = '';
 }
-// 初始化一次
 applyLang(currentLang);
-
-/* 新增：下拉框切换 */
-langSel.addEventListener('change',()=> applyLang(langSel.value) );
+langSel.addEventListener('change', ()=> applyLang(langSel.value) );
 
 /* =========  TTS 解锁 ========= */
 function unlockTTS(){
@@ -221,13 +220,14 @@ function speechSpeak(u){
   speechSynthesis.speak(u);
 }
 
-/* 朗读：失败自动重试一次 */
+/* 朗读：失败重试一次 */
 function speak(text){
   if(!('speechSynthesis' in window)) return;
   speaking = true;
   const u = new SpeechSynthesisUtterance(text);
-  // 关键：根据当前语言选声音
-  u.lang = currentLang==='ja' ? 'ja-JP' : 'en-US';
+  // 关键：根据语言选声音
+  const langMap = {en:'en-US', ja:'ja-JP', zh:'zh-CN'};
+  u.lang = langMap[currentLang];
   let retried = false;
   u.onend = () => speaking = false;
   u.onerror = () => {
@@ -269,7 +269,6 @@ async function send(){
   if(!txt||loading) return;
   inputEl.value='';
   addBubble('user',txt);
-
   messages.push({role:'user', content:txt});
   if(messages.length>MAX_HIST) messages.splice(1,1);
 
@@ -295,7 +294,8 @@ function startRecog(){
     return;
   }
   recog=new webkitSpeechRecognition();
-  recog.lang = currentLang==='ja' ? 'ja-JP' : 'en-US';   // 识别语言同步
+  const langMap = {en:'en-US', ja:'ja-JP', zh:'zh-CN'};
+  recog.lang = langMap[currentLang];   // 识别语言同步
   recog.interimResults=true;
   recog.continuous=true;
   recog.onresult=e=>{
