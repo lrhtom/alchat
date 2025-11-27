@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AI 口语助手</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<!-- =========  替换原 <style> 部分即可  ========= -->
+<style>
+/* ----  reset  ---- */
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
+  background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+  height:100vh;display:flex;flex-direction:column;
+  color:#333;
+}
+
+/* ----  聊天区  ---- */
+#chat{
+  flex:1;
+  overflow-y:auto;
+  padding:12px 16px 80px;          /* 底部留空防止输入栏遮挡 */
+  scroll-behavior:smooth;
+}
+.bubble{
+  position:relative;
+  max-width:70%;
+  padding:10px 14px;
+  margin:8px 0;
+  border-radius:18px;
+  animation:fadeIn .35s ease-out;
+  word-break:break-word;
+  box-shadow:0 2px 4px rgba(0,0,0,.08);
+}
+.user{
+  background:rgba(0,122,255,.95);
+  color:#fff;
+  margin-left:auto;
+  border-bottom-right-radius:4px;
+}
+.bot{
+  background:rgba(255,255,255,.95);
+  color:#000;
+  border-bottom-left-radius:4px;
+}
+/* 小尾巴 */
+.user::after,.bot::after{
+  content:"";
+  position:absolute;
+  bottom:-6px;
+  width:0;height:0;
+  border:6px solid transparent;
+}
+.user::after{right:0;border-top-color:rgba(0,122,255,.95);}
+.bot::after{left:0;border-top-color:rgba(255,255,255,.95);}
+
+@keyframes fadeIn{
+  from{opacity:0;transform:translateY(10px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+/* ----  底部玻璃栏  ---- */
+#bar{
+  position:fixed;
+  bottom:0;left:0;right:0;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:12px 16px;
+  background:rgba(255,255,255,.75);
+  backdrop-filter:blur(12px);
+  border-top:1px solid rgba(255,255,255,.4);
+  box-shadow:0 -2px 10px rgba(0,0,0,.05);
+}
+#input{
+  flex:1;
+  padding:10px 14px;
+  font-size:16px;
+  border:1px solid rgba(0,0,0,.08);
+  border-radius:20px;
+  background:rgba(255,255,255,.9);
+  outline:none;
+  transition:box-shadow .2s;
+}
+#input:focus{
+  box-shadow:0 0 0 3px rgba(0,122,255,.25);
+}
+button{
+  padding:10px 16px;
+  font-size:16px;
+  border:none;
+  border-radius:50%;
+  cursor:pointer;
+  color:#fff;
+  box-shadow:0 2px 6px rgba(0,0,0,.15);
+  transition:transform .15s,box-shadow .15s;
+}
+button:hover{transform:scale(1.05)}
+button:active{transform:scale(.95);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+#send{background:#007aff}
+#mic{background:#34c759;position:relative}
+#mic.active{background:#ff3b30}
+/* 柔和脉冲 */
+#mic.active::after{
+  content:"";
+  position:absolute;
+  inset:-6px;
+  border-radius:50%;
+  border:2px solid #ff3b30;
+  animation:pulse 1.4s infinite ease-out;
+}
+@keyframes pulse{
+  0%{transform:scale(.8);opacity:.8}
+  70%{transform:scale(1.6);opacity:0}
+  100%{transform:scale(.8);opacity:0}
+}
+
+/* ----  时间戳  ---- */
+.bubble small{
+  display:block;
+  font-size:11px;
+  opacity:.55;
+  margin-top:4px;
+  text-align:right;
+}
+</style>
+</head>
+<body>
+
+<!-- 聊天区 -->
+<div id="chat"></div>
+
+<!-- 底部操作栏 -->
+<div id="bar">
+  <input id="input" placeholder="输入英文或长按麦克风…" autocomplete="off" />
+  <button id="send">发送</button>
+  <button id="mic">🎤</button>
+</div>
+
+<script>
+/* =========  配置  ========= */
+const BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3';
+const API_KEY  = '4c335d77-5b75-468a-aff2-164f240ecc85';
+const MODEL    = 'ep-20251010224847-h9g7p';
+const SYSTEM   = 'You are a helpful English assistant. Always reply in English.每次谈话不可以太多词（100词上限）';
+
+/* =========  DOM  ========= */
+const chatBox = document.getElementById('chat');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const micBtn  = document.getElementById('mic');
+
+/* =========  状态  ========= */
+let loading   = false;
+let speaking  = false;
+let ttsUnlocked = false;
+
+/* =========  TTS：首次手势解锁 + 错误重试  ========= */
+function unlockTTS(){
+  if(ttsUnlocked) return;
+  ttsUnlocked = true;
+  const u=new SpeechSynthesisUtterance('');u.volume=0;speechSynthesis.speak(u);
+}
+function speechSpeak(u){
+  if(!ttsUnlocked) unlockTTS();
+  speechSynthesis.speak(u);
+}
+
+/* 朗读：失败自动重试一次 */
+function speak(text){
+  if(!('speechSynthesis' in window)) return;
+  speaking = true;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'en-US';
+  let retried = false;
+  u.onend = () => speaking = false;
+  u.onerror = () => {
+    if(!retried){ retried=true; speechSpeak(new SpeechSynthesisUtterance(text)); }
+    else speaking=false;
+  };
+  speechSpeak(u);
+}
+
+/* =========  聊天核心  ========= */
+async function askBot(text){
+  const res = await fetch(`${BASE_URL}/chat/completions`,{
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Authorization':`Bearer ${API_KEY}`
+    },
+    body:JSON.stringify({
+      model:MODEL,
+      messages:[
+        {role:'system',content:SYSTEM},
+        {role:'user',content:text}
+      ],
+      temperature:0.7
+    })
+  });
+  if(!res.ok) throw new Error(await res.text());
+  const json=await res.json();
+  return json.choices?.[0]?.message?.content??'';
+}
+
+function addBubble(role,text){
+  const div=document.createElement('div');
+  div.className='bubble '+role;
+  div.textContent=text;
+  chatBox.appendChild(div);
+  chatBox.scrollTop=chatBox.scrollHeight;
+}
+
+async function send(){
+  const txt=inputEl.value.trim();
+  if(!txt||loading) return;
+  inputEl.value='';
+  addBubble('user',txt);
+  loading=true; sendBtn.disabled=true;
+  try{
+    const reply=await askBot(txt);
+    addBubble('bot',reply);
+    speak(reply);
+  }catch(e){
+    addBubble(`bot,${Error} `+e.message);
+  }finally{
+    loading=false; sendBtn.disabled=false;
+  }
+}
+
+/* =========  语音输入：长按→连续监听  ========= */
+let recog,recording=false;
+function startRecog(){
+  if(!('webkitSpeechRecognition' in window)){
+    alert('请使用 Chrome/Edge 浏览器');
+    return;
+  }
+  recog=new webkitSpeechRecognition();
+  recog.lang='en-US';
+  recog.interimResults=true;
+  recog.continuous=true;
+  recog.onresult=e=>{
+    let final='';
+    for(let i=e.resultIndex;i<e.results.length;++i)
+      if(e.results[i].isFinal) final+=e.results[i][0].transcript+' ';
+    if(final) inputEl.value+=final;
+  };
+  recog.onend=()=>{ if(recording) recog.start(); };
+  recording=true;
+  micBtn.classList.add('active');
+  recog.start();
+}
+function stopRecog(){
+  recording=false;
+  micBtn.classList.remove('active');
+  if(recog) recog.stop();
+}
+micBtn.addEventListener('click',()=> recording ? stopRecog() : startRecog() );
+
+/* =========  发送按钮 / 回车  ========= */
+sendBtn.addEventListener('click',send);
+inputEl.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); }
+});
+</script>
+</body>
+</html>
